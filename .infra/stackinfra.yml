@@ -123,10 +123,10 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceAutoscaleRole
-  ServerLoadBalancer:
+  AppLoadBalancer:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
-      Name: !Sub ${ServerName}-${Environment}
+      Name: !Sub ${AppName}-${Environment}
       LoadBalancerAttributes:
         - Key: idle_timeout.timeout_seconds
           Value: 1800
@@ -135,30 +135,30 @@ Resources:
       Subnets:
         - !Ref Subnet1
         - !Ref Subnet2
-  ServerLoadBalancerListener:
+  AppLoadBalancerListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
-      LoadBalancerArn: !Ref ServerLoadBalancer
+      LoadBalancerArn: !Ref AppLoadBalancer
       Port: 80
       Protocol: HTTP
       DefaultActions:
         - Type: forward
-          TargetGroupArn: !Ref ServerTargetGroup
-  ServerHttpsLoadBalancerListener:
+          TargetGroupArn: !Ref AppTargetGroup
+  AppHttpsLoadBalancerListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
       Certificates:
-        - CertificateArn: arn:aws:acm:sa-east-1:878623218037:certificate/200bdf91-d93d-47c1-9a6c-30e557db7136
-      LoadBalancerArn: !Ref ServerLoadBalancer
+        - CertificateArn: arn:aws:acm:sa-east-1:USER_AWS:certificate/200bdf91-d93d-47c1-9a6c-30e557db7136
+      LoadBalancerArn: !Ref AppLoadBalancer
       Port: 443
       Protocol: HTTPS
       DefaultActions:
         - Type: forward
-          TargetGroupArn: !Ref ServerTargetGroup
-  ServerTargetGroup:
+          TargetGroupArn: !Ref AppTargetGroup
+  AppTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
-      Name: !Sub ${ServerName}-${Environment}
+      Name: !Sub ${AppName}-${Environment}
       VpcId: !Ref VPCId
       TargetType: ip
       Port: 3500
