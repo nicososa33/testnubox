@@ -1,0 +1,200 @@
+Parameters:
+  Environment:
+    Type: String
+    Default: stg
+  Region:
+    Type: String
+    Default: sa-east-1
+  VPCId:
+    Type: String
+    Default: vpc-123456
+  Subnet1:
+    Type: String
+    Default: subnet-123456
+  Subnet2:
+    Type: String
+    Default: subnet-123456
+  StackName:
+    Type: String
+    Default: nuboxapp
+Resources:
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub ${StackName}-${Environment}
+  appService:
+    Type: AWS::ECS::Service
+    DependsOn: appLoadBalancerListener
+    Properties:
+      ServiceName: !Sub ${appName}-${Environment}
+      TaskDefinition: !Ref appTaskDefinition
+      Cluster: !Ref Cluster
+      LoadBalancers:
+        - TargetGroupArn: !Ref appTargetGroup
+          ContainerName: !Sub ${appName}-${Environment}
+          ContainerPort: 3500
+      DesiredCount: 1
+      LaunchType: FARGATE
+      SchedulingStrategy: REPLICA
+      DeploymentController:
+        Type: ECS
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          SecurityGroups:
+            - !GetAtt SecurityGroup.GroupId
+          Subnets:
+            - !Ref Subnet1
+            - !Ref Subnet2
+          AssignPublicIp: ENABLED
+  appTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      ExecutionRoleArn: !GetAtt NuboxIamRole.Arn
+      ContainerDefinitions:
+        - Name: !Sub ${appName}-${Environment}
+          Image: AWS_USER.dkr.ecr.sa-east-1.amazonaws.com/nuboxapp:latest
+          Essential: true
+          PortMappings:
+            - ContainerPort: 3500
+              HostPort: 3500
+          EntryPoint:
+            - node
+            - app/index.js
+          Environment:
+            - name: AUTH_ENABLED
+              value: !Ref appAuthEnabled
+            - name: app_ENVIRONMENT
+              value: !Ref appEnvironment
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-create-group: True
+              awslogs-group: !Sub ${appName}-${Environment}
+              awslogs-region: sa-east-1
+              awslogs-stream-prefix: !Sub ${appName}-${Environment}
+      RequiresCompatibilities:
+        - FARGATE
+      NetworkMode: awsvpc
+      Cpu: 256
+      Memory: 512
+      Family: !Sub ${appName}-${Environment}
+  AutoScalingTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MinCapacity: 1
+      MaxCapacity: 20
+      ResourceId: !Join ['/', [service, !Ref Cluster, !GetAtt appService.Name]]
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+      RoleARN: !GetAtt AutoScalingRole.Arn
+  AutoScalingPolicyBasedOnCPU:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub ${appName}-${Environment}-CPUUtilization
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref AutoScalingTarget
+      TargetTrackingScalingPolicyConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        ScaleInCooldown: 10
+        ScaleOutCooldown: 10
+        TargetValue: 80
+  AutoScalingPolicyBasedOnMemory:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub ${appName}-${Environment}-MemoryUtilization
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref AutoScalingTarget
+      TargetTrackingScalingPolicyConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageMemoryUtilization
+        ScaleInCooldown: 10
+        ScaleOutCooldown: 10
+        TargetValue: 80
+  AutoScalingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${appName}-${Environment}-autoscaling
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceAutoscaleRole
+  ServerLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub ${ServerName}-${Environment}
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: 1800
+      SecurityGroups:
+        - !GetAtt SecurityGroup.GroupId
+      Subnets:
+        - !Ref Subnet1
+        - !Ref Subnet2
+  ServerLoadBalancerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ServerLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ServerTargetGroup
+  ServerHttpsLoadBalancerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      Certificates:
+        - CertificateArn: arn:aws:acm:sa-east-1:878623218037:certificate/200bdf91-d93d-47c1-9a6c-30e557db7136
+      LoadBalancerArn: !Ref ServerLoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ServerTargetGroup
+  ServerTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${ServerName}-${Environment}
+      VpcId: !Ref VPCId
+      TargetType: ip
+      Port: 3500
+      Protocol: HTTP
+      Matcher:
+        HttpCode: 200-299
+      HealthCheckIntervalSeconds: 10
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: 30
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub ${StackName}-${Environment}
+      SecurityGroupIngress:
+        - CidrIp: 0.0.0.0/0
+          IpProtocol: TCP
+          FromPort: 0
+          ToPort: 65535
+      VpcId: !Ref VPCId
+  NuboxIamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument: |
+        {
+            "Statement": [{
+                "Effect": "Allow",
+                "Principal": { "Service": [ "ecs-tasks.amazonaws.com" ]},
+                "Action": [ "sts:AssumeRole" ]
+            }]
+        }
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+        - arn:aws:iam::aws:policy/CloudWatchLogsFullAccess
