@@ -1,8 +1,12 @@
-FROM node:12
-WORKDIR /app
-COPY package.json /app
-RUN npm install
-COPY . /app
-EXPOSE 3000
+FROM node:12-alpine3.12 AS build
 
-CMD ["node", "src/index.js"]
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+RUN npm run build
+#CMD ["npm", "run", "start"]
+CMD ["npm", "start", "src/index.js"]
+
+
+
